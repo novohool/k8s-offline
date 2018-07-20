@@ -43,10 +43,12 @@ hostnamectl set-hostname 'master'
 echo "192.168.1.234 master" >> /etc/hosts
 python -c "import socket; print socket.getfqdn(); print socket.gethostbyname(socket.getfqdn())"
 ```
+```
 mkdir -p /opt/ && cd /opt/
 yum install -y yum-utils device-mapper-persistent-data lvm2 epel-release pigz socat screen
 
 cp client/bin/kubectl /usr/bin/
+```
 先需要装docker etcd 服务
 ```
 {
