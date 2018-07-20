@@ -39,18 +39,29 @@ EOF
 sysctl -p
 swapoff -a
 setenforce 0
+hostnamectl set-hostname 'master'
+echo "192.168.1.234 master" >> /etc/hosts
+python -c "import socket; print socket.getfqdn(); print socket.gethostbyname(socket.getfqdn())"
 ```
 mkdir -p /opt/ && cd /opt/
+yum install -y yum-utils device-mapper-persistent-data lvm2 epel-release pigz socat screen
+cp client/bin/kubectl /usr/bin/
 先需要装docker etcd 服务
 ```
 {
-yum install -y yum-utils device-mapper-persistent-data lvm2 epel-release pigz socat
 yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
 yum makecache fast
 yum -y install docker-ce-selinux-17.03.0.ce-1.el7.centos docker-ce-17.03.0.ce
 curl -sSL https://get.daocloud.io/daotools/set_mirror.sh | sh -s http://a004e50b.m.daocloud.io
 service docker start
 }
+[root@localhost server]# grep -v '^#' /etc/etcd/etcd.conf 
+ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+ETCD_LISTEN_CLIENT_URLS="http://localhost:2379,http://192.168.1.234:2379"
+ETCD_NAME="default"
+ETCD_ADVERTISE_CLIENT_URLS="http://192.168.1.234:2379"
+
+
 yum -y install etcd&& service etcd start 
  systemctl enable etcd docker
 ```
@@ -60,21 +71,21 @@ yum -y install etcd&& service etcd start
 cd kubernetes/server
 yum -y install screen
 vi kube-apiserver.sh 
-bin/kube-apiserver --cert-dir=etc/kubernetes/cert --insecure-bind-address=0.0.0.0 --insecure-port=8080 --service-cluster-ip-range=10.0.0.0/8 --etcd-servers=http://127.0.0.1:2379 --logtostderr=true  --allow-privileged=true
+bin/kube-apiserver --cert-dir=etc/kubernetes/cert --insecure-bind-address=0.0.0.0 --insecure-port=8080 --service-cluster-ip-range=10.0.0.0/16 --etcd-servers=http://192.168.1.234:2379 --logtostderr=true  --allow-privileged=true --anonymous-auth=true
 
 vi kube-controller-manager.sh
-bin/kube-controller-manager --master=127.0.0.1:8080 --service-account-private-key-file=etc/kubernetes/cert/apiserver.key --root-ca-file=etc/kubernetes/cert/apiserver.crt --logtostderr=true
+bin/kube-controller-manager --master=192.168.1.234:8080 --service-account-private-key-file=etc/kubernetes/cert/apiserver.key --root-ca-file=etc/kubernetes/cert/apiserver.crt --logtostderr=true
 
 vi kube-scheduler.sh
-bin/kube-scheduler --master=127.0.0.1:8080
+bin/kube-scheduler --master=192.168.1.234:8080
 
 ```
 
 ### 检测【适用node节点】
 ```
-bin/kubectl -s 127.0.0.1:8080 get ep -n kube-system
-bin/kubectl -s 127.0.0.1:8080 get cs
-bin/kubectl -s 127.0.0.1:8080 get all -o wide --all-namespaces
+bin/kubectl -s 192.168.1.234:8080 get ep -n kube-system
+bin/kubectl -s 192.168.1.234:8080 get cs
+bin/kubectl -s 192.168.1.234:8080 get all -o wide --all-namespaces
 kubectl get nodes
 kubectl get events
 ```
@@ -84,13 +95,13 @@ kubectl get events
 
 ### node:
 注意:
-127.0.0.1:8080 这个地址一直是kube-apiserver的地址
+192.168.1.234:8080 这个地址一直是kube-apiserver的地址
 这里node和master都能签发证书
 
 ```
 cd kubernetes/node
 mkdir -p etc/kubernetes/cert
-KUBE_APISERVER="http://127.0.0.1:8080"
+KUBE_APISERVER="http://192.168.1.234:8080"
 bin/kubectl config set-cluster kubernetes --server=$KUBE_APISERVER --kubeconfig=etc/kubernetes/kubelet.kubeconfig
 bin/kubectl config set-context default --cluster=kubernetes --user=default-noauth --kubeconfig=etc/kubernetes/kubelet.kubeconfig
 bin/kubectl config use-context default --kubeconfig=etc/kubernetes/kubelet.kubeconfig
@@ -109,7 +120,7 @@ bin/kubelet --cert-dir=etc/kubernetes/cert --kubeconfig=etc/kubernetes/kubelet.k
 
 
 vi kube-proxy.sh
-bin/kube-proxy --master=127.0.0.1:8080 --proxy-mode=iptables --logtostderr=true
+bin/kube-proxy --master=192.168.1.234:8080 --proxy-mode=iptables --logtostderr=true
 
 ```
 启动k8s基础服务
@@ -117,13 +128,13 @@ vi start-master.sh
 ```
 cd /opt/kubernetes/server
 screen -dmS kube-apiserver bash kube-apiserver.sh
-etcdctl --endpoints http://127.0.0.1:2379 set /flannel/network/config '{"Network":"10.0.0.0/8","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
+etcdctl --endpoints http://192.168.1.234:2379 set /flannel/network/config '{"Network":"10.0.0.0/16","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
 screen -dmS kube-controller-manager bash kube-controller-manager.sh
 screen -dmS kube-scheduler bash kube-scheduler.sh
 ```
 vi start-node.sh
 ```
-etcdctl --endpoints http://127.0.0.1:2379 set /flannel/network/config '{"Network":"10.0.0.0/8","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
+etcdctl --endpoints http://192.168.1.234:2379 set /flannel/network/config '{"Network":"10.0.0.0/16","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
 cd /opt/kubernetes/node
 screen -dmS kubelet bash kubelet.sh
 screen -dmS kube-proxy bash kube-proxy.sh
@@ -132,7 +143,7 @@ screen -dmS kube-proxy bash kube-proxy.sh
 ## 部署测试
 
 ```
-bin/kubectl -s 127.0.0.1:8080 run linux --image=jingslunt/linux --port=5701
+bin/kubectl -s 192.168.1.234:8080 run linux --image=jingslunt/linux --port=5701
 
 ```
 使用yml测试
@@ -160,12 +171,15 @@ https://github.com/coreos/etcd/releases
 
 安装flannel和ectdctl
 创建变量
-etcdctl --endpoints http://127.0.0.1:2379 set /flannel/network/config '{"Network":"10.0.0.0/8","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
+etcdctl --endpoints http://192.168.1.234:2379 set /flannel/network/config '{"Network":"10.0.0.0/16","SubnetLen":24,"Backend":{"Type":"vxlan","VNI":0}}'
 etcdctl get /flannel/network/config
 查看全部 etcdctl get / --prefix --keys-only
+
+yum -y install flannel
+mkdir -p /var/log/k8s/flannel/
 修改配置文件flanneld
 [root@localhost ~]# grep -v '^#' /etc/sysconfig/flanneld|grep -v ^$
-FLANNEL_ETCD_ENDPOINTS="http://127.0.0.1:2379"
+FLANNEL_ETCD_ENDPOINTS="http://192.168.1.234:2379"
 FLANNEL_ETCD_PREFIX="/flannel/network"
 FLANNEL_OPTIONS="--logtostderr=false --log_dir=/var/log/k8s/flannel/ --iface=eth0"
 ```
@@ -178,7 +192,7 @@ DOCKER_OPT_IPMASQ="--ip-masq=true"
 DOCKER_OPT_MTU="--mtu=1450"
 DOCKER_NETWORK_OPTIONS=" --bip=10.0.76.1/24 --ip-masq=true --mtu=1450"
 [root@localhost addons]# cat /run/flannel/subnet.env
-FLANNEL_NETWORK=10.0.0.0/8
+FLANNEL_NETWORK=10.0.0.0/16
 FLANNEL_SUBNET=10.0.76.1/24
 FLANNEL_MTU=1450
 FLANNEL_IPMASQ=false
@@ -203,8 +217,8 @@ for i in `ls images/`;do docker load < images/$i;done
 docker images|grep calico|awk '{print "docker tag "$3" quay.io/"$1":"$2}'
 
 cat calico.yaml|grep 2379 【修改etcd服务地址】
-etcd_endpoints: "http://127.0.0.1:2379"
-kubectl -s 127.0.0.1:8080 create -f k8s-manifests/hosted/calico.yaml
+etcd_endpoints: "http://192.168.1.234:2379"
+kubectl -s 192.168.1.234:8080 create -f k8s-manifests/hosted/calico.yaml
 
 ```
 
